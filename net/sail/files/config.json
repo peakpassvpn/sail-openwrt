@@ -1,0 +1,10 @@
+{
+  "log": { "level": "info" },
+  "inbounds": [
+    { "type": "mixed", "tag": "lan", "listen": "0.0.0.0", "listen_port": 7890 }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": { "final": "direct" }
+}
