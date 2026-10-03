@@ -8,6 +8,10 @@ release lists.
 
 OpenWrt 25.12 and later (apk packages).
 
+**Not installable yet.** No sail release has router archives so far: the
+package's version and hashes are placeholders, and building it now fails
+at the download. They are set with the first release that has them.
+
 ## Use the feed
 
 In an OpenWrt build tree or SDK, add to `feeds.conf`:
