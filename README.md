@@ -60,6 +60,9 @@ config sail 'main'
 
 - `config` is a sing-box JSON, Clash YAML or Surge profile, read as it is.
 - `profile` is sail's tuning preset: `router` uses the least memory.
+  The router build also allocates with musl's own allocator, which holds
+  less memory than mimalloc in sail's other builds; multiplexed (mux)
+  transfers are slower with it.
 - `cache_dir` holds subscriptions and remote rule-sets. `/var` is in RAM,
   so they are fetched again after a reboot; a directory on flash keeps
   them, at the cost of writes.
