@@ -73,9 +73,11 @@ service sail start
 
 The configuration is checked before every start and reload:
 
-- `service sail reload` restarts sail when its configuration file or its
-  UCI settings changed, and does nothing otherwise. A configuration that
-  does not check keeps the running one.
+- `service sail reload` applies an edited configuration file in place:
+  rules, outbounds, DNS and inbounds change without a restart, and only
+  the connections of inbounds removed or replaced are closed. A TUN inbound
+  added, removed or changed, or changed UCI settings, restart sail. A
+  configuration that does not check keeps the running one.
 - A start whose configuration does not check logs why (`logread -e sail`)
   and does not start.
 

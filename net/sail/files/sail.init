@@ -1,8 +1,10 @@
 #!/bin/sh /etc/rc.common
 # sail under procd: the configuration is checked before each start and
-# reload. A reload restarts sail when its configuration file or its UCI
-# settings changed: sail's own in-place reload (SIGHUP) takes new users
-# and certificates only, and keeps the rest as it was.
+# reload. A reload of the configuration file is sail's own (SIGHUP): it
+# applies changed rules, outbounds, DNS and inbounds and closes only the
+# connections of inbounds removed or replaced. What it can apply only at
+# a start (a TUN inbound added, removed or changed) restarts sail, as does
+# a change to the UCI settings, which make its command line.
 
 USE_PROCD=1
 START=99
@@ -31,7 +33,6 @@ start_service() {
 	procd_open_instance
 	procd_set_param command "$PROG" --config "$config" --data-dir /etc/sail \
 		--cache-dir "$cache_dir" --profile "$profile"
-	procd_set_param file "$config"
 	procd_set_param respawn
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -39,17 +40,53 @@ start_service() {
 	procd_close_instance
 }
 
+# sail's pid, as procd runs it: pidof would also find this script, whose
+# command line names sail too.
+sail_pid() {
+	ubus call service list '{"name":"sail"}' 2>/dev/null |
+		jsonfilter -e '@.sail.instances.*.pid' | head -n 1
+}
+
+# The outcome sail logged for the SIGHUP after the log line `mark`.
+reload_outcome() {
+	logread | sed -n "/$1/,\$p" | grep -F "sail[$2]:" |
+		grep -o -E 'SIGHUP: (reloaded|the configuration is not loaded.*)' | tail -n 1
+}
+
 reload_service() {
 	config_load sail
-	local config profile cache_dir
+	local config profile cache_dir pid mark outcome i
 	config_get config main config /etc/sail/config.json
 	config_get profile main profile router
 	config_get cache_dir main cache_dir /var/lib/sail
-	# A configuration that does not check keeps the running one; one that
-	# does is started again by procd if it, or the command line, changed.
+	# A configuration that does not check keeps the running one.
 	"$PROG" --config "$config" --data-dir /etc/sail --cache-dir "$cache_dir" \
 		--profile "$profile" --test >/dev/null || return 1
+	pid=$(sail_pid)
+	# procd starts sail again if its command line changed; the new one has
+	# read the file.
 	start
+	[ -n "$pid" ] && [ "$(sail_pid)" = "$pid" ] || return 0
+	mark="sail reload $$ $(date +%s)"
+	logger -t sail-init "$mark"
+	procd_send_signal sail
+	i=0
+	while [ $i -lt 10 ]; do
+		sleep 1
+		outcome=$(reload_outcome "$mark" "$pid")
+		[ -n "$outcome" ] && break
+		i=$((i + 1))
+	done
+	case "$outcome" in
+	"SIGHUP: reloaded") ;;
+	*"restart to apply"*) restart ;;
+	# An inbound replaced that could not bind, and whose old listener could
+	# not listen again, is gone: a start brings it back.
+	*"inbound: lost:"*) restart ;;
+	"") logger -t sail-init -p daemon.warn "reload: sail did not answer within 10 s" ;;
+	# Refused: sail logged why, and runs on with the configuration before.
+	*) return 1 ;;
+	esac
 }
 
 service_triggers() {

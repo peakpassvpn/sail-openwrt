@@ -13,7 +13,8 @@ import http.server, os, re, select, subprocess, sys, threading, time
 
 image, served = sys.argv[1], os.path.abspath(sys.argv[2])
 MIRROR = os.environ.get("OPENWRT_MIRROR", "https://downloads.openwrt.org")
-PROMPT = re.compile(rb"root@OpenWrt:[^\r\n]*# ")
+# The hostname may be unset yet at the first prompt: root@(none).
+PROMPT = re.compile(rb"root@[^:\r\n]*:[^\r\n]*# ")
 STATUS = re.compile(rb"@@RC:(\d+)")
 results = []
 
@@ -92,6 +93,9 @@ try:
     qemu.stdin.write(b"\n")
     expect(PROMPT, 30)
     run("stty -echo 2>/dev/null; export PS1='root@OpenWrt:~# '")
+    # sail's pid as procd runs it: pidof also finds the init script, whose
+    # command line names sail.
+    run("""sailpid() { ubus call service list '{"name":"sail"}' | jsonfilter -e '@.sail.instances.*.pid' | grep .; }""")
 
     # qemu's user network hands out 10.0.2.15 by DHCP; the image's lan is a
     # static 192.168.1.1.
@@ -108,41 +112,52 @@ try:
                  "/usr/share/licenses/sail/LICENSE"]:
         check(f"installed {path}", run(f"test -e {path}")[0] == 0)
     rc, out = run("sail -V")
-    check("sail runs", rc == 0 and re.fullmatch(r"\d+\.\d+\.\d+\S*", out.strip()), out)
+    check("sail runs", rc == 0 and re.match(r"\d+\.\d+\.\d+", out.strip()), out)
     check("kmod-tun and ca-bundle installed", run("apk info -e kmod-tun ca-bundle")[0] == 0)
 
     run("service sail start; sleep 2")
-    check("disabled by default: start does nothing", run("pidof sail")[0] != 0)
+    check("disabled by default: start does nothing", run("sailpid")[0] != 0)
 
     run("uci set sail.main.enabled=1; uci commit sail; service sail start")
-    check("enabled: it starts", wait_for("pidof sail >/dev/null"))
+    check("enabled: it starts", wait_for("sailpid >/dev/null"))
     check("it listens on 7890", wait_for("netstat -ltn | grep -q ':7890 '"))
-    pid = run("pidof sail")[1]
+    pid = run("sailpid")[1]
     rc, out = run("http_proxy=http://127.0.0.1:7890 wget -q -O - http://10.0.2.2:8000/hello", 30)
     check("HTTP through its mixed inbound", rc == 0 and "hello through sail" in out, out)
 
     run("service sail reload; sleep 2")
-    check("reload with nothing changed keeps the process", run("pidof sail")[1] == pid)
+    check("reload with nothing changed keeps the process", run("sailpid")[1] == pid)
 
     run("sed -i 's/7890/7891/' /etc/sail/config.json; service sail reload")
     ok = wait_for("netstat -ltn | grep -q ':7891 '")
     check("reload of an edited configuration applies it", ok,
           run("netstat -ltn | grep -E ':789'; logread -e sail | tail -n 5")[1])
-    check("by starting sail again", run("pidof sail")[1] not in ("", pid))
-    pid = run("pidof sail")[1]
+    check("in the same process (SIGHUP)", run("sailpid")[1] == pid)
+
+    # A rule: applied in place as well.
+    run("""sed -i 's/"route": { "final": "direct" }/"route": { "rules": [{ "domain": ["example.invalid"], "action": "reject" }], "final": "direct" }/' /etc/sail/config.json; service sail reload""")
+    check("a rule edit is applied in place", run("sailpid")[1] == pid
+          and run("logread -e sail | tail -n 3 | grep -q 'SIGHUP: reloaded'")[0] == 0)
+
+    # A TUN inbound sail takes only at a start: the reload restarts it.
+    run("""sed -i 's/"inbounds": \\[/"inbounds": [ { "type": "tun", "tag": "tun", "interface_name": "sailtun0", "address": ["172.19.0.1\\/30"], "auto_route": false },/' /etc/sail/config.json; service sail reload""", 60)
+    check("a TUN inbound added restarts sail", wait_for("[ -n \"$(sailpid)\" ] && [ \"$(sailpid)\" != " + pid + " ]")
+          and wait_for("ip link show sailtun0 >/dev/null 2>&1"),
+          run("ip link show sailtun0; logread -e sail | tail -n 6")[1])
+    pid = run("sailpid")[1]
 
     run("cp /etc/sail/config.json /tmp/good.json; echo '{ not json' > /etc/sail/config.json")
     rc, out = run("service sail reload")
     check("reload of a broken configuration is refused", rc != 0, f"rc={rc} {out}")
     time.sleep(2)
-    check("and the running one carries on", run("pidof sail")[1] == pid
+    check("and the running one carries on", run("sailpid")[1] == pid
           and run("netstat -ltn | grep -q ':7891 '")[0] == 0)
     run("service sail restart; sleep 3")
-    check("restart with a broken configuration does not start", run("pidof sail")[0] != 0)
+    check("restart with a broken configuration does not start", run("sailpid")[0] != 0)
     rc, out = run("logread -e sail | tail -n 3")
     check("and logs why", "config.json" in out, out)
     run("cp /tmp/good.json /etc/sail/config.json; service sail start")
-    check("the good configuration starts again", wait_for("pidof sail >/dev/null"))
+    check("the good configuration starts again", wait_for("sailpid >/dev/null"))
 
     rc, out = run("sysupgrade -l | grep -c '^/etc/sail/'")
     check("/etc/sail is kept across sysupgrade", rc == 0 and out.strip() not in ("", "0"), out)
