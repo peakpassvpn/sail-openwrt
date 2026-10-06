@@ -56,6 +56,7 @@ config sail 'main'
 	option config '/etc/sail/config.json'
 	option profile 'router'
 	option cache_dir '/var/lib/sail'
+	option tcp_buffers '0'
 ```
 
 - `config` is a sing-box JSON, Clash YAML or Surge profile, read as it is.
@@ -66,6 +67,12 @@ config sail 'main'
 - `cache_dir` holds subscriptions and remote rule-sets. `/var` is in RAM,
   so they are fetched again after a reboot; a directory on flash keeps
   them, at the cost of writes.
+- `tcp_buffers` is off by default. The kernel caps a TCP connection's
+  receive buffer by the router's memory: at 100 ms to the server, one
+  upstream connection carries about 75 Mbit/s on a 256 MB router and 150
+  on a 512 MB one. Turn it on for a faster line to a far server when the
+  router has memory to spare: it raises the cap to 6 MiB, which only fast
+  connections grow to. Turned off again, the cap returns at a reboot.
 
 Enable and start:
 

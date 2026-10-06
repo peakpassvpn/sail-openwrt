@@ -11,12 +11,31 @@ START=99
 STOP=10
 
 PROG=/usr/bin/sail
+TCP_SYSCTL=/etc/sysctl.d/90-sail-tcp.conf
+
+# The kernel's cap on a TCP connection's receive buffer, raised to 6 MiB
+# when the `tcp_buffers` option asks for it (the low and default sizes
+# kept, so the kernel still grows a buffer only for a fast connection).
+# The file is written only when it changes: it is on flash.
+tcp_buffers() {
+	if [ "$1" != 1 ]; then
+		rm -f "$TCP_SYSCTL"
+		return 0
+	fi
+	set -- $(cat /proc/sys/net/ipv4/tcp_rmem)
+	[ "$3" -ge 6291456 ] && [ ! -f "$TCP_SYSCTL" ] && return 0
+	local want="net.ipv4.tcp_rmem = $1 $2 6291456"
+	[ "$(cat "$TCP_SYSCTL" 2>/dev/null)" = "$want" ] || echo "$want" >"$TCP_SYSCTL"
+	sysctl -q -p "$TCP_SYSCTL"
+}
 
 start_service() {
 	config_load sail
-	local enabled config profile cache_dir
+	local enabled config profile cache_dir tcp
 	config_get_bool enabled main enabled 0
 	[ "$enabled" = 1 ] || return 0
+	config_get_bool tcp main tcp_buffers 0
+	tcp_buffers "$tcp"
 	config_get config main config /etc/sail/config.json
 	config_get profile main profile router
 	config_get cache_dir main cache_dir /var/lib/sail
