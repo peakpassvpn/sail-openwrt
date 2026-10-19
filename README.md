@@ -56,7 +56,7 @@ config sail 'main'
 	option config '/etc/sail/config.json'
 	option profile 'router'
 	option cache_dir '/var/lib/sail'
-	option tcp_buffers '0'
+	option tcp_buffers '1'
 ```
 
 - `config` is a sing-box JSON, Clash YAML or Surge profile, read as it is.
@@ -67,12 +67,24 @@ config sail 'main'
 - `cache_dir` holds subscriptions and remote rule-sets. `/var` is in RAM,
   so they are fetched again after a reboot; a directory on flash keeps
   them, at the cost of writes.
-- `tcp_buffers` is off by default. The kernel caps a TCP connection's
-  receive buffer by the router's memory: at 100 ms to the server, one
-  upstream connection carries about 75 Mbit/s on a 256 MB router and 150
-  on a 512 MB one. Turn it on for a faster line to a far server when the
-  router has memory to spare: it raises the cap to 6 MiB, which only fast
-  connections grow to. Turned off again, the cap returns at a reboot.
+- `tcp_buffers` is on by default, and **changes a system-wide setting**:
+  the kernel's cap on every TCP connection's receive buffer
+  (`net.ipv4.tcp_rmem`, its third value), raised to 6 MiB through
+  `/etc/sysctl.d/90-sail-tcp.conf`. The kernel sets the cap by the
+  router's memory, and at 100 ms to the server it holds one upstream
+  connection to about 13 Mbit/s on a 128 MB router, 35 on a 256 MB one
+  and 70 on a 512 MB one; at 6 MiB, about 110 on each (measured in qemu
+  guests with a Trojan upstream, sail issue #5). Only connections that
+  read fast grow to it, and all TCP buffers stay within the kernel's
+  total (`net.ipv4.tcp_mem`): with stalled readers on 128 to 512 MB, memory
+  use was the same as without it. A cap already above 6 MiB is left
+  alone, and the cap's low and default values are kept. To turn it off:
+
+  ```sh
+  uci set sail.main.tcp_buffers=0 && uci commit sail && service sail reload
+  ```
+
+  The file is removed; the kernel's own cap returns at the next reboot.
 
 Enable and start:
 

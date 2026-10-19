@@ -159,17 +159,21 @@ try:
     run("cp /tmp/good.json /etc/sail/config.json; service sail start")
     check("the good configuration starts again", wait_for("sailpid >/dev/null"))
 
-    # tcp_buffers: off by default, on raises the receive cap to 6 MiB.
-    check("tcp_buffers off: no sysctl file", run("test -e /etc/sysctl.d/90-sail-tcp.conf")[0] != 0)
+    # tcp_buffers: on by default, the receive cap raised to 6 MiB, never lowered.
     low = run("cut -f1,2 /proc/sys/net/ipv4/tcp_rmem")[1].split()
-    run("uci set sail.main.tcp_buffers=1; uci commit sail; service sail reload", 60)
     rc, out = run("cat /proc/sys/net/ipv4/tcp_rmem")
-    check("tcp_buffers on: the cap is 6 MiB, the rest kept", out.split() == low + ["6291456"], out)
+    check("tcp_buffers on by default: the cap is 6 MiB, the rest kept", out.split() == low + ["6291456"], out)
     check("and lasts across a reboot", run("cat /etc/sysctl.d/90-sail-tcp.conf")[1].strip()
           == "net.ipv4.tcp_rmem = " + " ".join(low) + " 6291456")
     run("uci set sail.main.tcp_buffers=0; uci commit sail; service sail reload", 60)
-    check("tcp_buffers off again: the file is gone", run("test -e /etc/sysctl.d/90-sail-tcp.conf")[0] != 0)
+    check("tcp_buffers off: the file is gone", run("test -e /etc/sysctl.d/90-sail-tcp.conf")[0] != 0)
     check("and sail runs", wait_for("sailpid >/dev/null"))
+    run("sysctl -w net.ipv4.tcp_rmem='" + " ".join(low) + " 8388608'")
+    run("uci set sail.main.tcp_buffers=1; uci commit sail; service sail reload", 60)
+    rc, out = run("cat /proc/sys/net/ipv4/tcp_rmem")
+    check("a cap already above 6 MiB is left alone", out.split() == low + ["8388608"], out)
+    check("and no file is written", run("test -e /etc/sysctl.d/90-sail-tcp.conf")[0] != 0)
+    check("and sail runs on", wait_for("sailpid >/dev/null"))
 
     rc, out = run("sysupgrade -l | grep -c '^/etc/sail/'")
     check("/etc/sail is kept across sysupgrade", rc == 0 and out.strip() not in ("", "0"), out)
